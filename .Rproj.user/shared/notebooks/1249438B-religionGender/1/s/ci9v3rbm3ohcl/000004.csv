@@ -1,0 +1,23 @@
+"0","print(mediation(m1.1, treatment = ""female""), digits = 2)
+"
+"1","[34m
+# Causal Mediation Analysis for Stan Model
+
+[39m"
+"1","[36m  Treatment: female
+   Mediator: FORMALED
+   Response: BGINT
+[39m"
+"1","
+"
+"1","                 Estimate   HDI (90%)
+"
+"1","  Direct effect:     0.03 [0.01 0.04]
+"
+"1","Indirect effect:     0.00 [0.00 0.01]
+"
+"1","   Total effect:     0.03 [0.01 0.05]
+"
+"1","[31m
+Proportion mediated: 10.46% [-0.49% 21.41%]
+[39m"

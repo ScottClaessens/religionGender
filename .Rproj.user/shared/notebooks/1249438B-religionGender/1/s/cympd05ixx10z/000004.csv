@@ -1,0 +1,9 @@
+"0","m1.2 <- brm(bf(PRAY ~ 1 + FORMALED*MMAT.C + female*MMAT.C + (1 | SITE),"
+"0","               family=cumulative(""logit"")) +"
+"0","            bf(FORMALED ~ 1 + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)"
+"2","Compiling the C++ model
+"
+"2","Start sampling
+"
+"0","m1.2 <- add_ic(m1.2, ic = c(""waic"", ""loo""))"
+"0","save(m1.2, file = ""models/m1.2.rda"")"

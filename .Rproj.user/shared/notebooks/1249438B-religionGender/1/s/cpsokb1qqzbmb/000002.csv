@@ -1,0 +1,7 @@
+"0","# n = 1155"
+"0","d_temp <-"
+"0","  d %>%"
+"0","  select(SITE, PRAY, FORMALED, female, MMAT.C) %>%"
+"0","  drop_na() %>%"
+"0","  # ordered outcome"
+"0","  mutate(PRAY = factor(PRAY, ordered = TRUE))"

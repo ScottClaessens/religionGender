@@ -1,0 +1,5 @@
+"0","# n = 1864"
+"0","d_temp <-"
+"0","  d %>%"
+"0","  select(SITE, BGINT, FORMALED, female, MMAT.C) %>%"
+"0","  drop_na()"

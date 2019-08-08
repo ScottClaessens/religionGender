@@ -1,0 +1,284 @@
+---
+title: "Religious Gender Gap"
+author: Scott Claessens
+date: "`r format(Sys.Date())`"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    number_sections: false
+    toc_float: true
+---
+
+The purpose of this document is to conduct multilevel moderated mediation models using [brms](https://github.com/paul-buerkner/brms).
+
+# 0. Setup
+
+```{r echo=FALSE, cache=FALSE, include=FALSE}
+options(width = 120)
+
+library(tidyverse)
+library(brms)
+library(readxl)
+library(sjstats)
+library(kableExtra)
+```
+
+Load the data.
+
+```{r warning=F, message=F}
+d <- 
+  readxl::read_xlsx("data/religionGender.xlsx", na = "NA") %>%
+  select(CID, SITE, SEX, BGINT, PRAY, BGRIT, FORMALED, MMAT) %>%
+  # create dummy for SEX
+  mutate(female = ifelse(SEX=="Women",1,0)) %>%
+  # scale MMAT
+  mutate(MMAT.C = scale(MMAT, center = TRUE, scale = FALSE)[,])
+
+d
+```
+
+# 1. Fit moderated mediation models
+
+Tom would like to fit models of the following type.
+
+![](images/modelExample.png)
+
+We conduct three different models, one for each religiosity variable.
+
+## 1.1. BGINT
+
+Retain complete cases.
+
+```{r}
+# n = 1864
+d_temp <-
+  d %>%
+  select(SITE, BGINT, FORMALED, female, MMAT.C) %>%
+  drop_na()
+```
+
+Fit model.
+
+```{r eval=F}
+m1.1 <- brm(bf(BGINT ~ 0 + intercept + FORMALED*MMAT.C + female*MMAT.C + (1 | SITE)) +
+            bf(FORMALED ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+
+m1.1 <- add_ic(m1.1, ic = c("waic", "loo"))
+
+save(m1.1, file = "models/m1.1.rda")
+```
+
+```{r echo=F}
+load("models/m1.1.rda")
+```
+
+I'm fairly sure this is the model that is specified in the drawing above (i.e. I've followed the arrows from Material Insecurity carefully). However, it seems different from Tom's R script. Tom: please let me know if the model above is specified incorrectly. For example, a [full moderated mediation](https://en.wikipedia.org/wiki/Moderated_mediation) would also require an interaction in the second `bf()` formula, though this isn't in your drawing.
+
+Results.
+
+```{r}
+summary(m1.1)
+```
+
+```{r}
+print(mediation(m1.1, treatment = "female"), digits = 2)
+```
+
+It seems like there's a direct effect of gender on religiosity, and this is not mediated by years of formal education. The lack of interaction effect with `MMAT.C` implies that material insecurity does not moderate this mediation.
+
+Another way we could look to see if the moderated mediation is important is to run another model with no moderation. We then compare with WAIC and LOO.
+
+```{r eval=F, echo=F}
+m1.1_noMod <- brm(bf(BGINT ~ 0 + intercept + FORMALED + female + (1 | SITE)) +
+                  bf(FORMALED ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+
+m1.1_noMod <- add_ic(m1.1_noMod, ic = c("waic", "loo"))
+
+save(m1.1_noMod, file = "models/m1.1_noMod.rda")
+```
+
+```{r echo=F}
+load("models/m1.1_noMod.rda")
+```
+
+```{r}
+compare_ic(m1.1, m1.1_noMod, ic = "waic")
+compare_ic(m1.1, m1.1_noMod, ic = "loo")
+```
+
+The model without the moderated mediation performs better.
+
+## 1.2. PRAY
+
+Retain complete cases.
+
+```{r}
+# n = 1155
+d_temp <-
+  d %>%
+  select(SITE, PRAY, FORMALED, female, MMAT.C) %>%
+  drop_na() %>%
+  # ordinal outcome
+  mutate(PRAY = factor(PRAY, ordered = TRUE))
+```
+
+The approach is the same with an ordinal outcome, except we change the model family in `brms`.
+
+```{r eval=F}
+m1.2 <- brm(bf(PRAY ~ 1 + FORMALED*MMAT.C + female*MMAT.C + (1 | SITE), family=cumulative("logit")) +
+            bf(FORMALED ~ 1 + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+
+m1.2 <- add_ic(m1.2, ic = c("waic", "loo"))
+
+save(m1.2, file = "models/m1.2.rda")
+```
+
+```{r echo=F}
+load("models/m1.2.rda")
+```
+
+Results.
+
+```{r}
+summary(m1.2)
+```
+
+```{r}
+print(mediation(m1.2, treatment = "female"), digits = 2)
+```
+
+Again, there's a direct effect of gender on religiosity, and this is not mediated by years of formal education. The lack of interaction effect with `MMAT.C` implies that material insecurity does not moderate this mediation.
+
+Use model comparison again.
+
+```{r eval=F, echo=F}
+m1.2_noMod <- brm(bf(PRAY ~ 1 + FORMALED + female + (1 | SITE),
+                     family=cumulative("logit")) +
+                  bf(FORMALED ~ 1 + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+
+m1.2_noMod <- add_ic(m1.2_noMod, ic = c("waic", "loo"))
+
+save(m1.2_noMod, file = "models/m1.2_noMod.rda")
+```
+
+```{r echo=F}
+load("models/m1.2_noMod.rda")
+```
+
+```{r}
+compare_ic(m1.2, m1.2_noMod, ic = "waic")
+compare_ic(m1.2, m1.2_noMod, ic = "loo")
+```
+
+The model without moderation is no better than the moderated mediation model.
+
+## 1.3. BGRIT
+
+Retain complete cases.
+
+```{r}
+# n = 1171
+d_temp <-
+  d %>%
+  select(SITE, BGRIT, FORMALED, female, MMAT.C) %>%
+  drop_na()
+```
+
+Fit model.
+
+```{r eval=F}
+m1.3 <- brm(bf(BGRIT ~ 0 + intercept + FORMALED*MMAT.C + female*MMAT.C + (1 | SITE)) +
+            bf(FORMALED ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4,
+            control = list(adapt_delta = 0.9))
+
+m1.3 <- add_ic(m1.3, ic = c("waic", "loo"))
+
+save(m1.3, file = "models/m1.3.rda")
+```
+
+```{r echo=F}
+load("models/m1.3.rda")
+```
+
+Results.
+
+```{r}
+summary(m1.3)
+```
+
+```{r}
+print(mediation(m1.3, treatment = "female"), digits = 2)
+```
+
+There's a direct effect of gender on religiosity, and this is not mediated by years of formal education. There seems to be something interesting going on with our moderator in this model. Will model comparison reflect this?
+
+```{r eval=F, echo=F}
+m1.3_noMod <- brm(bf(BGRIT ~ 0 + intercept + FORMALED + female + (1 | SITE)) +
+                  bf(FORMALED ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+
+m1.3_noMod <- add_ic(m1.3_noMod, ic = c("waic", "loo"))
+
+save(m1.3_noMod, file = "models/m1.3_noMod.rda")
+```
+
+```{r echo=F}
+load("models/m1.3_noMod.rda")
+```
+
+```{r}
+compare_ic(m1.3, m1.3_noMod, ic = "waic")
+compare_ic(m1.3, m1.3_noMod, ic = "loo")
+```
+
+The model with the moderation performs slightly better (but there are wide standard errors).
+
+We can manually compute direct, indirect, and total effects for high and low moderators (code hidden here).
+
+```{r echo=F, message=F, warning=F}
+post <- posterior_samples(m1.3)
+
+# low moderator
+lowDirect   <- post$b_BGRIT_female + post$`b_BGRIT_MMAT.C:female`*min(d_temp$MMAT.C)
+lowIndirect <- post$b_FORMALED_female*(post$b_BGRIT_FORMALED 
+                                       + post$`b_BGRIT_FORMALED:MMAT.C`*min(d_temp$MMAT.C))
+lowTotal    <- lowDirect + lowIndirect
+
+# high moderator
+highDirect   <- post$b_BGRIT_female + post$`b_BGRIT_MMAT.C:female`*max(d_temp$MMAT.C)
+highIndirect <- post$b_FORMALED_female*(post$b_BGRIT_FORMALED
+                                       + post$`b_BGRIT_FORMALED:MMAT.C`*max(d_temp$MMAT.C))
+highTotal    <- highDirect + highIndirect
+
+tibble(
+  Estimate  = c(median(lowDirect), median(lowIndirect), 
+                median(lowTotal )),
+  Q2.5      = c(quantile(lowDirect, 0.025), quantile(lowIndirect, 0.025), 
+                quantile(lowTotal , 0.025)),
+  Q97.5     = c(quantile(lowDirect, 0.975), quantile(lowIndirect, 0.975), 
+                quantile(lowTotal , 0.975)),
+  .Estimate = c(median(highDirect), median(highIndirect), 
+                median(highTotal )),
+  .Q2.5     = c(quantile(highDirect, 0.025), quantile(highIndirect, 0.025), 
+                quantile(highTotal , 0.025)),
+  .Q97.5    = c(quantile(highDirect, 0.975), quantile(highIndirect, 0.975), 
+                quantile(highTotal , 0.975)),
+  pMCMC     = c(sum(highDirect > lowDirect) / 4000,
+                sum(highIndirect > lowIndirect) / 4000,
+                sum(highTotal > lowTotal) / 4000)
+  
+) %>%
+  round(2) %>%
+  `rownames<-`(c("Direct effect", "Indirect effect", "Total effect")) %>%
+  kable() %>%
+  kable_styling(full_width = F) %>%
+  add_header_above(c("", "Min Moderator" = 3, "Max Moderator" = 3, "Difference"))
+```
+
+It seems that the indirect effect of gender on religion (through years of education) is larger for the lowest material insecurity people than the highest. Does this fit your hypotheses?
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
