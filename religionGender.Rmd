@@ -10,7 +10,7 @@ output:
     toc_float: true
 ---
 
-The purpose of this document is to conduct multilevel moderated mediation models using [brms](https://github.com/paul-buerkner/brms).
+The purpose of this document is to conduct multilevel mediation models using [brms](https://github.com/paul-buerkner/brms).
 
 # 0. Setup
 
@@ -22,6 +22,7 @@ library(brms)
 library(readxl)
 library(sjstats)
 library(kableExtra)
+library(diagram)
 ```
 
 Load the data.
@@ -32,21 +33,25 @@ d <-
   select(CID, SITE, SEX, BGINT, PRAY, BGRIT, FORMALED, MMAT) %>%
   # create dummy for SEX
   mutate(female = ifelse(SEX=="Women",1,0)) %>%
-  # scale MMAT
-  mutate(MMAT.C = scale(MMAT, center = TRUE, scale = FALSE)[,])
+  # remove extremes for beta distribution
+  mutate(BGINT = ifelse(BGINT == 0, 0.0001, ifelse(BGINT == 1, 0.9999, BGINT))) %>%
+  # PRAY and BGRIT are ordered factors
+  mutate(PRAY  = factor(PRAY,   ordered = TRUE),
+         BGRIT = factor(BGRIT,  ordered = TRUE)) %>%
+  # standardise continuous variables
+  mutate(FORMALED.std = scale(FORMALED)[,],
+         MMAT.std     = scale(MMAT)[,])
 
 d
 ```
 
-# 1. Fit moderated mediation models
-
-Tom would like to fit models of the following type.
+Tom would like to fit models of the following type to these data.
 
 ![](images/modelExample.png)
 
-We conduct three different models, one for each religiosity variable.
+We conduct models in three stages: (1) direct effect only, (2) mediation, and (3) moderated mediation. We can later compare these using WAIC. We repeat this process for each religion variable.
 
-## 1.1. BGINT
+# 1. BGINT
 
 Retain complete cases.
 
@@ -54,15 +59,26 @@ Retain complete cases.
 # n = 1864
 d_temp <-
   d %>%
-  select(SITE, BGINT, FORMALED, female, MMAT.C) %>%
+  select(SITE, BGINT, FORMALED.std, female, MMAT.std, SEX) %>%
   drop_na()
 ```
 
-Fit model.
+The religious variable `BGINT` is constrained between 0 and 1, so should not be treated as continuous. A Beta distribution should be used instead of a Gaussian (and WAIC shows the Beta distribution is superior with this outcome variable, I'll leave that up to the reader).
 
-```{r eval=F}
-m1.1 <- brm(bf(BGINT ~ 0 + intercept + FORMALED*MMAT.C + female*MMAT.C + (1 | SITE)) +
-            bf(FORMALED ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+```{r echo=F}
+ggplot(d_temp, aes(x = BGINT)) +
+  geom_histogram() +
+  facet_wrap(.~SEX) +
+  theme_classic()
+```
+
+## 1.1. Direct effect only
+
+```{r eval=F, echo=F}
+# also include FORMALED.std here so we can compare models later
+m1.1 <- brm(bf(BGINT ~ 1 + female + (1 | SITE), family = "beta") +
+            bf(FORMALED.std ~ 1 + (1 | SITE)) + set_rescor(FALSE),
+            d_temp, cores = 4)
 
 m1.1 <- add_ic(m1.1, ic = c("waic", "loo"))
 
@@ -71,63 +87,51 @@ save(m1.1, file = "models/m1.1.rda")
 
 ```{r echo=F}
 load("models/m1.1.rda")
-```
-
-I'm fairly sure this is the model that is specified in the drawing above (i.e. I've followed the arrows from Material Insecurity carefully). However, it seems different from Tom's R script. Tom: please let me know if the model above is specified incorrectly. For example, a [full moderated mediation](https://en.wikipedia.org/wiki/Moderated_mediation) would also require an interaction in the second `bf()` formula, though this isn't in your drawing.
-
-Results.
-
-```{r}
 summary(m1.1)
 ```
 
-```{r}
-print(mediation(m1.1, treatment = "female"), digits = 2)
+This model fits better than the Gaussian alternative.
+
+```{r echo=F, message=F}
+pp_check(m1.1, resp = "BGINT")
 ```
 
-It seems like there's a direct effect of gender on religiosity, and this is not mediated by years of formal education. The lack of interaction effect with `MMAT.C` implies that material insecurity does not moderate this mediation.
+However, the parameter for `female` does not reliably lie above zero.
 
-Another way we could look to see if the moderated mediation is important is to run another model with no moderation. We then compare with WAIC and LOO.
+```{r echo=F}
+post <- posterior_samples(m1.1)
+
+tibble(samples = post$b_BGINT_female) %>%
+  ggplot(aes(samples)) +
+  geom_density() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_classic() +
+  xlab("female")
+```
+
+In line with this, model comparison (against a null random-intercept-only model) shows that including SEX improves the fit of the model, but not by much. Together, this suggests only a small direct effect of SEX for this outcome variable.
 
 ```{r eval=F, echo=F}
-m1.1_noMod <- brm(bf(BGINT ~ 0 + intercept + FORMALED + female + (1 | SITE)) +
-                  bf(FORMALED ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+m1.1_null <- brm(bf(BGINT ~ 1 + (1 | SITE), family = "beta") +
+                 bf(FORMALED.std ~ 1 + (1 | SITE)) + set_rescor(FALSE), 
+                 d_temp, cores = 4)
 
-m1.1_noMod <- add_ic(m1.1_noMod, ic = c("waic", "loo"))
+m1.1_null <- add_ic(m1.1_null, ic = c("waic", "loo"))
 
-save(m1.1_noMod, file = "models/m1.1_noMod.rda")
+save(m1.1_null, file = "models/m1.1_null.rda")
 ```
 
 ```{r echo=F}
-load("models/m1.1_noMod.rda")
+load("models/m1.1_null.rda")
+compare_ic(m1.1, m1.1_null, ic = "waic")
 ```
 
-```{r}
-compare_ic(m1.1, m1.1_noMod, ic = "waic")
-compare_ic(m1.1, m1.1_noMod, ic = "loo")
-```
+## 1.2. Mediation model
 
-The model without the moderated mediation performs better.
-
-## 1.2. PRAY
-
-Retain complete cases.
-
-```{r}
-# n = 1155
-d_temp <-
-  d %>%
-  select(SITE, PRAY, FORMALED, female, MMAT.C) %>%
-  drop_na() %>%
-  # ordinal outcome
-  mutate(PRAY = factor(PRAY, ordered = TRUE))
-```
-
-The approach is the same with an ordinal outcome, except we change the model family in `brms`.
-
-```{r eval=F}
-m1.2 <- brm(bf(PRAY ~ 1 + FORMALED*MMAT.C + female*MMAT.C + (1 | SITE), family=cumulative("logit")) +
-            bf(FORMALED ~ 1 + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+```{r eval=F, echo=F}
+m1.2 <- brm(bf(BGINT ~ 0 + intercept + female + FORMALED.std + (1 | SITE), family = "beta") +
+            bf(FORMALED.std ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE),
+            d_temp, cores = 4)
 
 m1.2 <- add_ic(m1.2, ic = c("waic", "loo"))
 
@@ -136,61 +140,37 @@ save(m1.2, file = "models/m1.2.rda")
 
 ```{r echo=F}
 load("models/m1.2.rda")
-```
-
-Results.
-
-```{r}
 summary(m1.2)
 ```
 
-```{r}
-print(mediation(m1.2, treatment = "female"), digits = 2)
-```
-
-Again, there's a direct effect of gender on religiosity, and this is not mediated by years of formal education. The lack of interaction effect with `MMAT.C` implies that material insecurity does not moderate this mediation.
-
-Use model comparison again.
-
-```{r eval=F, echo=F}
-m1.2_noMod <- brm(bf(PRAY ~ 1 + FORMALED + female + (1 | SITE),
-                     family=cumulative("logit")) +
-                  bf(FORMALED ~ 1 + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
-
-m1.2_noMod <- add_ic(m1.2_noMod, ic = c("waic", "loo"))
-
-save(m1.2_noMod, file = "models/m1.2_noMod.rda")
-```
+We can draw this out for ease of interpretation. Stars represent 95% CIs outside zero.
 
 ```{r echo=F}
-load("models/m1.2_noMod.rda")
+data <- c(0, "'-.12*'", 0,
+          0, 0, 0, 
+          "'-.07'", "'.09'", 0)
+M <- matrix (nrow=3, ncol=3, byrow = TRUE, data=data)
+plot <- plotmat(M, pos=c(1,2), 
+                name= c( "Years of formal\neducation","Female","Religiosity (BGINT)"), 
+                box.type = "rect", box.size = 0.12, box.prop=0.5,  curve=0)
+rm(M); rm(plot); rm(data)
 ```
 
-```{r}
-compare_ic(m1.2, m1.2_noMod, ic = "waic")
-compare_ic(m1.2, m1.2_noMod, ic = "loo")
+The direct effect decreases very slightly. There's also a possible mediation pathway whereby females have fewer years of formal education, and those with fewer years of formal education are more likely to be religious (the two non-starred paths are very close to being 'significant', see model output).
+
+Model comparison suggests that this mediation model is a better fit to the data than the direct effect alone, but the standard errors are uncertain.
+
+```{r echo=F, warnings=F}
+compare_ic(m1.1, m1.2, ic = "waic")
 ```
 
-The model without moderation is no better than the moderated mediation model.
+## 1.3. Moderated mediation model
 
-## 1.3. BGRIT
+Here, we treat the moderator `MAT.std` as a standardised continuous variable. However, from a histogram of the data, it seems to be an ordered categorical predictor (Tom did mention it was "pseudo-continuous"). Perhaps in the future we could use the `mo()` function to model monotonic effects.
 
-Retain complete cases.
-
-```{r}
-# n = 1171
-d_temp <-
-  d %>%
-  select(SITE, BGRIT, FORMALED, female, MMAT.C) %>%
-  drop_na()
-```
-
-Fit model.
-
-```{r eval=F}
-m1.3 <- brm(bf(BGRIT ~ 0 + intercept + FORMALED*MMAT.C + female*MMAT.C + (1 | SITE)) +
-            bf(FORMALED ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4,
-            control = list(adapt_delta = 0.9))
+```{r eval=F, echo=F}
+m1.3 <- brm(bf(BGINT ~ 0 + intercept + FORMALED.std*MMAT.std + female*MMAT.std + (1 | SITE), family = "beta") +
+            bf(FORMALED.std ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
 
 m1.3 <- add_ic(m1.3, ic = c("waic", "loo"))
 
@@ -199,83 +179,338 @@ save(m1.3, file = "models/m1.3.rda")
 
 ```{r echo=F}
 load("models/m1.3.rda")
-```
-
-Results.
-
-```{r}
 summary(m1.3)
 ```
 
+The lack of interaction effect with `MMAT.std` implies that material insecurity does not moderate this mediation. Does model comparison confirm this suspicion?
+
 ```{r}
-print(mediation(m1.3, treatment = "female"), digits = 2)
+compare_ic(m1.1, m1.2, m1.3, ic = "waic")
 ```
 
-There's a direct effect of gender on religiosity, and this is not mediated by years of formal education. There seems to be something interesting going on with our moderator in this model. Will model comparison reflect this?
+The model without the moderated mediation performs better.
+
+# 2. PRAY
+
+Retain complete cases.
+
+```{r}
+# n = 1155
+d_temp <-
+  d %>%
+  select(SITE, PRAY, FORMALED.std, female, MMAT.std) %>%
+  drop_na()
+```
+
+## 2.1. Direct effect only
+
+The approach is the same with an ordinal outcome, except we change the model family from beta to cumulative.
 
 ```{r eval=F, echo=F}
-m1.3_noMod <- brm(bf(BGRIT ~ 0 + intercept + FORMALED + female + (1 | SITE)) +
-                  bf(FORMALED ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+m2.1 <- brm(bf(PRAY ~ 1 + female + (1 | SITE), family = cumulative("logit")) +
+            bf(FORMALED.std ~ 1 + (1 | SITE)) + set_rescor(FALSE),
+            d_temp, cores = 4, control = list(adapt_delta = 0.9))
 
-m1.3_noMod <- add_ic(m1.3_noMod, ic = c("waic", "loo"))
+m2.1 <- add_ic(m2.1, ic = c("waic", "loo"))
 
-save(m1.3_noMod, file = "models/m1.3_noMod.rda")
+save(m2.1, file = "models/m2.1.rda")
 ```
 
 ```{r echo=F}
-load("models/m1.3_noMod.rda")
+load("models/m2.1.rda")
+summary(m2.1)
 ```
+
+```{r echo=F, message=F}
+pp_check(m2.1, resp = "PRAY")
+```
+
+For this outcome variable, the parameter for `female` lies reliably above zero.
+
+```{r echo=F}
+post <- posterior_samples(m2.1)
+
+tibble(samples = post$b_PRAY_female) %>%
+  ggplot(aes(samples)) +
+  geom_density() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_classic() +
+  xlab("female")
+```
+
+In line with this, model comparison (against a null random-intercept-only model) shows that including SEX improves the fit of the model (though there are wide standard errors).
+
+```{r eval=F, echo=F}
+m2.1_null <- brm(bf(PRAY ~ 1 + (1 | SITE), family = cumulative("logit")) +
+                 bf(FORMALED.std ~ 1 + (1 | SITE)) + set_rescor(FALSE), 
+                 d_temp, cores = 4, control = list(adapt_delta = 0.99, max_treedepth = 15))
+
+m2.1_null <- add_ic(m2.1_null, ic = c("waic", "loo"))
+
+save(m2.1_null, file = "models/m2.1_null.rda")
+```
+
+```{r echo=F}
+load("models/m2.1_null.rda")
+compare_ic(m2.1, m2.1_null, ic = "waic")
+```
+
+## 2.2. Mediation model
+
+```{r eval=F, echo=F}
+m2.2 <- brm(bf(PRAY ~ 1 + female + FORMALED.std + (1 | SITE), family = cumulative("logit")) +
+            bf(FORMALED.std ~ 1 + female + (1 | SITE)) + set_rescor(FALSE),
+            d_temp, cores = 4, control = list(adapt_delta = 0.99, max_treedepth = 15))
+
+m2.2 <- add_ic(m2.2, ic = c("waic", "loo"))
+
+save(m2.2, file = "models/m2.2.rda")
+```
+
+```{r echo=F}
+load("models/m2.2.rda")
+summary(m2.2)
+```
+
+We can draw this out. Stars represent 95% CIs outside zero.
+
+```{r echo=F}
+data <- c(0, "'-.18*'", 0,
+          0, 0, 0, 
+          "'-.25*'", "'.37*'", 0)
+M <- matrix (nrow=3, ncol=3, byrow = TRUE, data=data)
+plot <- plotmat(M, pos=c(1,2), 
+                name= c( "Years of formal\neducation","Female","Religiosity (PRAY)"), 
+                box.type = "rect", box.size = 0.12, box.prop=0.5,  curve=0)
+rm(M); rm(plot); rm(data)
+```
+
+The direct effect has decreased slightly, and there is a 'significant' indirect effect. This is a partial mediation. Does model comparison capture this?
+
+```{r echo=F, warnings=F}
+compare_ic(m2.1, m2.2, ic = "waic")
+```
+
+Yes. The mediation model is preferred.
+
+## 2.3. Moderated mediation model
+
+```{r eval=F, echo=F}
+m2.3 <- brm(bf(PRAY ~ 1 + FORMALED.std*MMAT.std + female*MMAT.std + (1 | SITE), family = cumulative("logit")) +
+            bf(FORMALED.std ~ 1 + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+
+m2.3 <- add_ic(m2.3, ic = c("waic", "loo"))
+
+save(m2.3, file = "models/m2.3.rda")
+```
+
+```{r echo=F}
+load("models/m2.3.rda")
+summary(m2.3)
+```
+
+Again the lack of interaction effects suggests that there's no moderation of material insecurity.
 
 ```{r}
-compare_ic(m1.3, m1.3_noMod, ic = "waic")
-compare_ic(m1.3, m1.3_noMod, ic = "loo")
+compare_ic(m2.1, m2.2, m2.3, ic = "waic")
 ```
 
-The model with the moderation performs slightly better (but there are wide standard errors).
+`m2.3` is slightly worse than the mediation-only model.
 
-We can manually compute direct, indirect, and total effects for high and low moderators (code hidden here).
+# 3. BGRIT
 
-```{r echo=F, message=F, warning=F}
-post <- posterior_samples(m1.3)
+Retain complete cases.
 
-# low moderator
-lowDirect   <- post$b_BGRIT_female + post$`b_BGRIT_MMAT.C:female`*min(d_temp$MMAT.C)
-lowIndirect <- post$b_FORMALED_female*(post$b_BGRIT_FORMALED 
-                                       + post$`b_BGRIT_FORMALED:MMAT.C`*min(d_temp$MMAT.C))
-lowTotal    <- lowDirect + lowIndirect
-
-# high moderator
-highDirect   <- post$b_BGRIT_female + post$`b_BGRIT_MMAT.C:female`*max(d_temp$MMAT.C)
-highIndirect <- post$b_FORMALED_female*(post$b_BGRIT_FORMALED
-                                       + post$`b_BGRIT_FORMALED:MMAT.C`*max(d_temp$MMAT.C))
-highTotal    <- highDirect + highIndirect
-
-tibble(
-  Estimate  = c(median(lowDirect), median(lowIndirect), 
-                median(lowTotal )),
-  Q2.5      = c(quantile(lowDirect, 0.025), quantile(lowIndirect, 0.025), 
-                quantile(lowTotal , 0.025)),
-  Q97.5     = c(quantile(lowDirect, 0.975), quantile(lowIndirect, 0.975), 
-                quantile(lowTotal , 0.975)),
-  .Estimate = c(median(highDirect), median(highIndirect), 
-                median(highTotal )),
-  .Q2.5     = c(quantile(highDirect, 0.025), quantile(highIndirect, 0.025), 
-                quantile(highTotal , 0.025)),
-  .Q97.5    = c(quantile(highDirect, 0.975), quantile(highIndirect, 0.975), 
-                quantile(highTotal , 0.975)),
-  pMCMC     = c(sum(highDirect > lowDirect) / 4000,
-                sum(highIndirect > lowIndirect) / 4000,
-                sum(highTotal > lowTotal) / 4000)
-  
-) %>%
-  round(2) %>%
-  `rownames<-`(c("Direct effect", "Indirect effect", "Total effect")) %>%
-  kable() %>%
-  kable_styling(full_width = F) %>%
-  add_header_above(c("", "Min Moderator" = 3, "Max Moderator" = 3, "Difference"))
+```{r}
+# n = 1171
+d_temp <-
+  d %>%
+  select(SITE, BGRIT, FORMALED.std, female, MMAT.std) %>%
+  drop_na()
 ```
 
-It seems that the indirect effect of gender on religion (through years of education) is larger for the lowest material insecurity people than the highest. Does this fit your hypotheses?
+## 3.1. Direct effect only
+
+```{r eval=F, echo=F}
+m3.1 <- brm(bf(BGRIT ~ 1 + female + (1 | SITE), family = cumulative("logit")) +
+            bf(FORMALED.std ~ 1 + (1 | SITE)) + set_rescor(FALSE),
+            d_temp, cores = 4, control = list(adapt_delta = 0.9))
+
+m3.1 <- add_ic(m3.1, ic = c("waic", "loo"))
+
+save(m3.1, file = "models/m3.1.rda")
+```
+
+```{r echo=F}
+load("models/m3.1.rda")
+summary(m3.1)
+```
+
+```{r echo=F, warning=F}
+pp_check(m3.1, resp = "BGRIT")
+```
+
+As before, the parameter for `female` lies reliably above zero.
+
+```{r echo=F}
+post <- posterior_samples(m3.1)
+
+tibble(samples = post$b_BGRIT_female) %>%
+  ggplot(aes(samples)) +
+  geom_density() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_classic() +
+  xlab("female")
+```
+
+Model comparison (against a null random-intercept-only model) shows that including SEX improves the fit of the model (but again with wide standard errors).
+
+```{r eval=F, echo=F}
+m3.1_null <- brm(bf(BGRIT ~ 1 + (1 | SITE), family = cumulative("logit")) +
+                 bf(FORMALED.std ~ 1 + (1 | SITE)) + set_rescor(FALSE), 
+                 d_temp, cores = 4, control = list(adapt_delta = 0.99, max_treedepth = 15))
+
+m3.1_null <- add_ic(m3.1_null, ic = c("waic", "loo"))
+
+save(m3.1_null, file = "models/m3.1_null.rda")
+```
+
+```{r echo=F}
+load("models/m3.1_null.rda")
+compare_ic(m3.1, m3.1_null, ic = "waic")
+```
+
+## 3.2. Mediation model
+
+```{r eval=F, echo=F}
+m3.2 <- brm(bf(BGRIT ~ 1 + female + FORMALED.std + (1 | SITE), family = cumulative("logit")) +
+            bf(FORMALED.std ~ 1 + female + (1 | SITE)) + set_rescor(FALSE),
+            d_temp, cores = 4, control = list(adapt_delta = 0.99, max_treedepth = 15))
+
+m3.2 <- add_ic(m3.2, ic = c("waic", "loo"))
+
+save(m3.2, file = "models/m3.2.rda")
+```
+
+```{r echo=F}
+load("models/m3.2.rda")
+summary(m3.2)
+```
+
+In the diagram, stars represent 95% CIs outside zero.
+
+```{r echo=F}
+data <- c(0, "'-.19*'", 0,
+          0, 0, 0, 
+          "'-.19*'", "'.29*'", 0)
+M <- matrix (nrow=3, ncol=3, byrow = TRUE, data=data)
+plot <- plotmat(M, pos=c(1,2), 
+                name= c( "Years of formal\neducation","Female","Religiosity (BGRIT)"), 
+                box.type = "rect", box.size = 0.12, box.prop=0.5,  curve=0)
+rm(M); rm(plot); rm(data)
+```
+
+Model comparison.
+
+Another partial mediation. Model comparison captures this.
+
+```{r echo=F, warnings=F}
+compare_ic(m3.1, m3.2, ic = "waic")
+```
+
+## 3.3. Moderated mediation model
+
+```{r eval=F, echo=F}
+m3.3 <- brm(bf(BGRIT ~ 1 + FORMALED.std*MMAT.std + female*MMAT.std + (1 | SITE), family = cumulative("logit")) +
+            bf(FORMALED.std ~ 1 + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)
+
+m3.3 <- add_ic(m3.3, ic = c("waic", "loo"))
+
+save(m3.3, file = "models/m3.3.rda")
+```
+
+```{r echo=F}
+load("models/m3.3.rda")
+summary(m3.3)
+```
+
+Material insecurity seems to affect the "b" path (FORMALED.std -> BGRIT). Let's visualise this.
+
+```{r echo=F}
+post <- posterior_samples(m3.3)
+
+# calculate change in slope
+mmat.seq <- seq(min(d_temp$MMAT.std), max(d_temp$MMAT.std), length.out = 1000)
+b_slope  <- b_slope_0.025 <- b_slope_0.975 <- c()
+for (i in 1:1000) {
+  temp <- post$b_BGRIT_FORMALED.std + post$`b_BGRIT_FORMALED.std:MMAT.std`*mmat.seq[i]
+  b_slope       <- c(b_slope, median(temp))
+  b_slope_0.025 <- c(b_slope_0.025, quantile(temp, 0.025))
+  b_slope_0.975 <- c(b_slope_0.975, quantile(temp, 0.975))
+}
+
+tibble(MMAT = mmat.seq, b_slope = b_slope, 
+       b_slope_0.025 = b_slope_0.025, b_slope_0.975 = b_slope_0.975) %>%
+  ggplot(aes(y = b_slope, ymin = b_slope_0.025, ymax = b_slope_0.975, x = MMAT)) +
+  geom_smooth(stat = "identity", fill = "grey70", color = "black", alpha = 1, size = 1/2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_classic() +
+  xlab("Material insecurity (MMAT)") +
+  ylab("Path B slope (FORMALED -> BGRIT)")
+```
+
+It seems years of formal education has a negative effect on religiosity only for those lower in material insecurity (or lower in material SECURITY? I'm not sure).
+
+This leads to an improvement in model fit, but this isn't substantial. This suggests there's a small moderating effect of material insecurity in this model.
+
+```{r}
+compare_ic(m3.1, m3.2, m3.3, ic = "waic")
+```
+
+# 4. Plotting all model comparisons
+
+It's useful to visualise all these model comparisons at once. Remember, a lower WAIC is better. Lines represent 95% CIs.
+
+```{r echo=F}
+waicFig1a <-
+  compare_ic(m1.1_null, m1.1, m1.2, m1.3, ic = "waic")$ic_diffs__ %>%
+  as.matrix() %>% as_tibble() %>% slice(1:3) %>%
+  mutate(model   = c("Direct effect","Mediation","Moderated mediation"),
+         outcome = rep("BGINT",3))
+
+waicFig1b <-
+  compare_ic(m2.1_null, m2.1, m2.2, m2.3, ic = "waic")$ic_diffs__ %>%
+  as.matrix() %>% as_tibble() %>% slice(1:3) %>%
+  mutate(model   = c("Direct effect","Mediation","Moderated mediation"),
+         outcome = rep("PRAY",3))
+
+waicFig1c <-
+  compare_ic(m3.1_null, m3.1, m3.2, m3.3, ic = "waic")$ic_diffs__ %>%
+  as.matrix() %>% as_tibble() %>% slice(1:3) %>%
+  mutate(model   = c("Direct effect","Mediation","Moderated mediation"),
+         outcome = rep("BGRIT",3))
+
+waicFig1 <- rbind(waicFig1a, waicFig1b, waicFig1c)
+
+fig1 <-
+  waicFig1 %>%
+  ggplot(aes(x = fct_rev(factor(model, levels = model[1:3])), 
+             y = WAIC*-1, 
+             ymin = WAIC*-1 - (SE*1.96), 
+             ymax = WAIC*-1 + (SE*1.96))) +
+  geom_pointrange(size = 0.35) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  coord_flip() +
+  xlab(NULL) +
+  ylab("WAIC difference from null model") +
+  facet_grid(rows = vars(outcome)) +
+  theme_classic()
+
+fig1
+
+# save to file
+ggsave(fig1, file = "figures/fig1.pdf", height = 6, width = 6)
+```
 
 # Session Info
 

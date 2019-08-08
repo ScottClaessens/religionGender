@@ -1,8 +1,0 @@
-"0","m1.3_noMod <- brm(bf(BGRIT ~ 0 + intercept + FORMALED + female + (1 | SITE)) +"
-"0","                  bf(FORMALED ~ 0 + intercept + female + (1 | SITE)) + set_rescor(FALSE), d_temp, cores = 4)"
-"2","Compiling the C++ model
-"
-"2","recompiling to avoid crashing R session
-"
-"2","Start sampling
-"
